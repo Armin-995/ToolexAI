@@ -1,24 +1,92 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { useAuth } from '@/lib/auth';
+import { useToast } from '@/components/ui/use-toast';
+import { supabase } from '@/lib/supabase';
+import { Loader2 } from 'lucide-react';
 
 export const ShareTool = () => {
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  const { toast } = useToast();
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
   const [formData, setFormData] = useState({
     name: '',
     category: '',
     description: '',
     location: '',
     condition: '',
+    price: '',
     images: [] as File[],
+    tags: '',
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    // TODO: Implement form submission
-    console.log('Form submitted:', formData);
+    if (!user) return;
+
+    setIsSubmitting(true);
+    try {
+      // Upload images first
+      const imageUrls = await Promise.all(
+        formData.images.map(async (file) => {
+          const fileExt = file.name.split('.').pop();
+          const fileName = `${Math.random()}.${fileExt}`;
+          const { data, error } = await supabase.storage
+            .from('tool-images')
+            .upload(fileName, file);
+
+          if (error) throw error;
+          return supabase.storage.from('tool-images').getPublicUrl(data.path).data.publicUrl;
+        })
+      );
+
+      // Create tool record
+      const { data: tool, error } = await supabase
+        .from('tools')
+        .insert([
+          {
+            title: formData.name,
+            category: formData.category,
+            description: formData.description,
+            location: formData.location,
+            condition: formData.condition,
+            price: parseFloat(formData.price),
+            images: imageUrls,
+            tags: formData.tags.split(',').map(tag => tag.trim()),
+            owner_id: user.id,
+            owner_email: user.email,
+            contact_email: user.email,
+            status: 'available'
+          }
+        ])
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      toast({
+        title: "Tool Shared Successfully! 🎉",
+        description: "Your tool has been listed and is now available for borrowing.",
+      });
+
+      navigate(`/browse?tool=${tool.id}`);
+    } catch (error) {
+      console.error('Error sharing tool:', error);
+      toast({
+        variant: "destructive",
+        title: "Error Sharing Tool",
+        description: "There was a problem sharing your tool. Please try again.",
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -80,6 +148,20 @@ export const ShareTool = () => {
           </div>
 
           <div className="space-y-2">
+            <Label htmlFor="price">Daily Rate ($)</Label>
+            <Input
+              id="price"
+              type="number"
+              min="0"
+              step="0.01"
+              value={formData.price}
+              onChange={(e) => setFormData({ ...formData, price: e.target.value })}
+              placeholder="Enter daily rental rate"
+              required
+            />
+          </div>
+
+          <div className="space-y-2">
             <Label htmlFor="condition">Condition</Label>
             <Select
               value={formData.condition}
@@ -99,6 +181,19 @@ export const ShareTool = () => {
           </div>
 
           <div className="space-y-2">
+            <Label htmlFor="tags">Tags (comma-separated)</Label>
+            <Input
+              id="tags"
+              value={formData.tags}
+              onChange={(e) => setFormData({ ...formData, tags: e.target.value })}
+              placeholder="e.g., cordless, battery-powered, professional"
+            />
+            <p className="text-sm text-muted-foreground">
+              Add tags to help others find your tool
+            </p>
+          </div>
+
+          <div className="space-y-2">
             <Label htmlFor="images">Images</Label>
             <Input
               id="images"
@@ -107,6 +202,14 @@ export const ShareTool = () => {
               accept="image/*"
               onChange={(e) => {
                 const files = Array.from(e.target.files || []);
+                if (files.length > 5) {
+                  toast({
+                    variant: "destructive",
+                    title: "Too Many Images",
+                    description: "You can upload up to 5 images.",
+                  });
+                  return;
+                }
                 setFormData({ ...formData, images: files });
               }}
             />
@@ -115,8 +218,15 @@ export const ShareTool = () => {
             </p>
           </div>
 
-          <Button type="submit" className="w-full">
-            Share Tool
+          <Button type="submit" className="w-full" disabled={isSubmitting}>
+            {isSubmitting ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Sharing Tool...
+              </>
+            ) : (
+              'Share Tool'
+            )}
           </Button>
         </form>
       </div>
